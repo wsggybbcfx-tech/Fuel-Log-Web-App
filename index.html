@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>FuelLog • 你的入油手帳 (Native)</title>
+    
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 引入日系字體 (Zen Maru Gothic) -->
+    <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700;900&display=swap" rel="stylesheet">
+
+    <style>
+        body { 
+            font-family: 'Zen Maru Gothic', sans-serif; 
+            background-color: #fcfaf5; /* 米色和紙質感 */
+            color: #4a4a4a;
+            -webkit-tap-highlight-color: transparent;
+        }
+        /* 隱藏 Scrollbar 但保持功能 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        /* 彈窗動畫 */
+        @keyframes modalUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .animate-modal { animation: modalUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .animate-fade { animation: fadeIn 0.2s ease-out; }
+
+        /* 確保日期輸入框在不同瀏覽器中視覺正常 */
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            padding: 0; /* 減少內建圖標的填充，讓它貼近邊緣 */
+            margin-left: -5px; /* 輕微負邊距，將圖標拉回框內 */
+        }
+    </style>
+</head>
+<body>
+    <!-- 主應用程式容器 -->
+    <div id="app" class="max-w-md mx-auto min-h-screen relative pb-20 bg-[#fcfaf5]">
+        <!-- 內容將由 JavaScript 渲染 -->
+    </div>
+
+    <script>
+        // --- 應用程式狀態管理 ---
+        const state = {
+            entries: [],
+            view: 'dashboard', // 'dashboard', 'add'
+            editingId: null,
+            showYearBreakdown: false,
+            selectedMonthData: null,
+            deleteConfirmId: null,
+            formData: {
+                date: new Date().toISOString().split('T')[0],
+                totalCost: '',
+                liters: '',
+                odometer: '',
+                notes: ''
+            }
+        };
+
+        // --- 圖示集 (SVG Path) ---
+        const Icons = {
+            Plus: `<path d="M5 12h14M12 5v14"/>`,
+            X: `<path d="M18 6 6 18M6 6l12 12"/>`,
+            Fuel: `<path d="M3 22v-8a2 2 0 0 1 2-2h2.5a2 2 0 0 1 2 2v8M15 8h2a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2M13 14h6M11 2a2 2 0 0 0-2 2v10h4V4a2 2 0 0 0-2-2z"/>`,
+            ChevronRight: `<path d="m9 18 6-6-6-6"/>`,
+            Trash2: `<path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6"/>`,
+            Edit2: `<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>`,
+            TrendingUp: `<path d="m22 7-8.5 8.5-5-5L2 17"/>`,
+            Save: `<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8"/>`,
+            Alert: `<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>`
+        };
+
+        // SVG 圖示生成器
+        const Icon = (path, size = 20, className = "") => `
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                width="${size}" height="${size}" 
+                viewBox="0 0 24 24" 
+                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" 
+                class="${className}"
+            >
+                ${path}
+            </svg>
+        `;
+
+        // --- 數據持久化及初始化 ---
+        const generateMockData = () => {
+            const data = [];
+            const baseDate = new Date('2024-01-15');
+            let currentOdometer = 15000;
+            for (let i = 0; i < 6; i++) {
+                const date = new Date(baseDate);
+                date.setMonth(baseDate.getMonth() + i);
+                for (let j = 0; j < 2; j++) {
+                    date.setDate(date.getDate() + 14);
+                    const distance = 400 + Math.floor(Math.random() * 100);
+                    const liters = 35 + Math.floor(Math.random() * 10);
+                    const totalCost = liters * 23.5;
+                    currentOdometer += distance;
+                    data.push({
+                        id: Date.now() + i * 100 + j + Math.random(),
+                        date: date.toISOString().split('T')[0],
+                        totalCost: Math.round(totalCost),
+                        liters: liters,
+                        odometer: currentOdometer,
+                        notes: j % 2 === 0 ? "日常返工" : "假日遊車河 🌸",
+                    });
+                }
+            }
+            return data.sort((a, b) => new Date(b.date) - new Date(b.date));
+        };
+
+        const loadInitialData = () => {
+            const savedData = localStorage.getItem('fuel_entries_v3_js');
+            if (savedData) {
+                state.entries = JSON.parse(savedData);
+            } else {
+                state.entries = generateMockData();
+                saveData();
+            }
+        };
+
+        const saveData = () => {
+            localStorage.setItem('fuel_entries_v3_js', JSON.stringify(state.entries));
+        };
+
+        // --- 數據計算核心邏輯 ---
+        const getEnrichedEntries = () => {
+            const sortedAsc = [...state.entries].sort((a, b) => new Date(a.date) - new Date(b.date));
+            return sortedAsc.map((entry, index) => {
+                const prevEntry = index > 0 ? sortedAsc[index - 1] : null;
+                let distance = 0, consumption = 0, costPerKm = 0, performance = "🚗 記錄中...";
+
+                if (prevEntry) {
+                    distance = entry.odometer - prevEntry.odometer;
+                    if (distance > 0) {
+                        consumption = (entry.liters / distance) * 100;
+                        costPerKm = entry.totalCost / distance;
+                        if (consumption < 8.5) performance = "✨ 超級慳油";
+                        else if (consumption < 10.5) performance = "👍 表現不錯";
+                        else if (consumption < 13) performance = "😐 正常發揮";
+                        else performance = "💸 有點大食";
+                    }
+                }
+                return { ...entry, distance, consumption: consumption.toFixed(1), costPerKm: costPerKm.toFixed(2), performance };
+            }).sort((a, b) => new Date(b.date) - new Date(a.date));
+        };
+
+        const getStats = (enrichedEntries) => {
+            if (enrichedEntries.length === 0) return { totalCost: 0, totalDist: 0, avgCon: 0 };
+            const totalCost = enrichedEntries.reduce((sum, e) => sum + Number(e.totalCost), 0);
+            
+            const validDistEntries = enrichedEntries.filter(e => e.odometer > 0);
+            let totalDist = 0;
+            if (validDistEntries.length > 1) {
+                totalDist = Math.max(...validDistEntries.map(e => e.odometer)) - Math.min(...validDistEntries.map(e => e.odometer));
+            }
+
+            const entriesWithDist = enrichedEntries.filter(e => e.distance > 0);
+            const totalLiters = entriesWithDist.reduce((sum, e) => sum + Number(e.liters), 0);
+            const totalDistForCon = entriesWithDist.reduce((sum, e) => sum + e.distance, 0);
+            const avgCon = totalDistForCon > 0 ? (totalLiters / totalDistForCon) * 100 : 0;
+            return { totalCost, totalDist, avgCon: avgCon.toFixed(1) };
+        };
+
+        const getMonthlyBreakdown = (enrichedEntries) => {
+            const groups = {};
+            enrichedEntries.forEach(entry => {
+                const dateObj = new Date(entry.date);
+                const monthKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth()+1).padStart(2,'0')}`;
+                if (!groups[monthKey]) {
+                    groups[monthKey] = { 
+                        key: monthKey, 
+                        displayMonth: `${dateObj.getMonth()+1}月`,
+                        year: dateObj.getFullYear(),
+                        totalCost: 0, entries: [], totalDist: 0, totalLiters: 0
+                    };
+                }
+                groups[monthKey].totalCost += entry.totalCost;
+                groups[monthKey].entries.push(entry);
+                if(entry.distance > 0) {
+                    groups[monthKey].totalDist += entry.distance;
+                    groups[monthKey].totalLiters += Number(entry.liters);
+                }
+            });
+            return Object.values(groups).map(g => ({
+                ...g,
+                avgCostPerKm: g.totalDist > 0 ? (g.totalCost / g.totalDist).toFixed(2) : 0,
+                avgCon: g.totalDist > 0 ? (g.totalLiters / g.totalDist * 100).toFixed(1) : 0
+            })).sort((a, b) => b.key.localeCompare(a.key));
+        };
+
+
+        // --- UI 組件渲染函數 ---
+        const renderHeader = () => {
+            const isAdding = state.view === 'add';
+            return `
+                <div class="sticky top-0 z-20 bg-[#fcfaf5]/90 backdrop-blur-md px-6 py-4 flex justify-between items-center border-b border-[#f0ebe0]">
+                    <div class="flex items-center gap-2">
+                        <span class="bg-[#e0e8d9] p-2 rounded-xl text-[#6b8c6b]">
+                            ${Icon(Icons.Fuel)}
+                        </span>
+                        <span class="font-bold text-lg text-[#5c5c5c] tracking-wide">FuelLog</span>
+                    </div>
+                    <button 
+                        onclick="handleViewToggle()"
+                        class="bg-[#5c5c5c] text-[#fcfaf5] p-2.5 rounded-xl shadow-lg active:scale-95 transition-all"
+                    >
+                        ${Icon(isAdding ? Icons.X : Icons.Plus)}
+                    </button>
+                </div>
+            `;
+        };
+        
+        const renderCard = (content, className = "", onClick = "") => {
+            return `
+                <div onclick="${onClick}" class="bg-white rounded-[20px] p-5 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] border border-[#f0ebe0] ${onClick ? 'cursor-pointer active:scale-98 transition-transform' : ''} ${className}">
+                    ${content}
+                </div>
+            `;
+        };
+
+        const renderDashboard = (enrichedEntries, stats) => {
+            const recentLogs = enrichedEntries.slice(0, 5).map(entry => {
+                const dateObj = new Date(entry.date);
+                return `
+                    <div class="relative group">
+                        <!-- 刪除按鈕 (調整到卡片內部邊緣，避免重疊文字) -->
+                        <button onclick="event.stopPropagation(); handleDeletePrompt('${entry.id}')" 
+                            class="absolute top-2 right-2 z-10 text-[#d0d0d0] hover:text-red-400 p-2 rounded-full hover:bg-red-50 transition-colors">
+                            ${Icon(Icons.Trash2, 16)}
+                        </button>
+                        ${renderCard(`
+                            <div class="flex justify-between items-start">
+                                <div class="flex gap-3">
+                                    <div class="bg-[#f5f5f5] p-2 rounded-xl text-center min-w-[50px] h-fit">
+                                        <span class="block text-[10px] text-[#a0a0a0] font-bold uppercase">
+                                            ${dateObj.toLocaleString('en-US', {month: 'short'})}
+                                        </span>
+                                        <span class="block text-xl font-bold text-[#5c5c5c] leading-none mt-1">
+                                            ${dateObj.getDate()}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <p class="font-bold text-[#5c5c5c] text-lg">$${entry.totalCost.toLocaleString()}</p>
+                                        <p class="text-xs text-[#a0a0a0] mt-0.5">${entry.odometer.toLocaleString()} km</p>
+                                        ${entry.notes ? `<p class="text-xs text-[#888] mt-2 bg-[#f9f9f9] p-1.5 rounded-lg inline-block">📝 ${entry.notes}</p>` : ''}
+                                    </div>
+                                </div>
+                                <div class="text-right mt-6">
+                                    <span class="text-[10px] font-bold px-2 py-1 rounded-lg ${entry.distance > 0 ? 'bg-[#e0e8d9] text-[#557c55]' : 'bg-gray-100 text-gray-400'}">
+                                        ${entry.distance > 0 ? `$${entry.costPerKm}/km` : '首筆記錄'}
+                                    </span>
+                                    <p class="text-[10px] text-[#a0a0a0] mt-1.5">${entry.performance}</p>
+                                </div>
+                            </div>
+                        `, "relative", `handleEdit('${entry.id}')`)}
+                    </div>
+                `;
+            }).join('');
+
+            // 使用淺灰色 (#dcdcdc) 作為深卡片上的文字顏色，並確保粗體
+            const lightGrayText = 'text-[#dcdcdc] font-bold'; 
+
+            return `
+                <!-- 總覽區塊 -->
+                <div>
+                    <h2 class="text-xs font-bold text-[#a0a0a0] tracking-widest mb-3 px-1">ANNUAL REPORT</h2>
+                    <div class="grid grid-cols-2 gap-3">
+                        ${renderCard(`
+                            <div class="absolute right-0 top-0 opacity-10 transform translate-x-4 -translate-y-4">
+                                ${Icon(Icons.Fuel, 120)}
+                            </div>
+                            <div class="relative z-10">
+                                <p class="${lightGrayText} text-xs mb-1">年度總油費</p>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-3xl font-mono ${lightGrayText}">$${stats.totalCost.toLocaleString()}</span>
+                                    ${Icon(Icons.ChevronRight, 18, "text-[#dcdcdc]")}
+                                </div>
+                                <div class="mt-4 flex gap-3 text-xs ${lightGrayText}">
+                                    <span class="bg-white/10 px-2 py-1 rounded-lg">${(stats.totalDist/1000).toFixed(1)}k km</span>
+                                    <span class="bg-white/10 px-2 py-1 rounded-lg">${stats.avgCon} L/100km</span>
+                                </div>
+                            </div>
+                        `, "col-span-2 bg-[#6b705c] border-none text-white relative overflow-hidden group", `handleShowYearBreakdown(true)`)}
+                        
+                        ${renderCard(`
+                            <div class="flex flex-col h-full justify-between">
+                                <div class="bg-[#ffe4e1] w-8 h-8 rounded-full flex items-center justify-center text-[#d17b88] mb-2">
+                                    ${Icon(Icons.TrendingUp, 16)}
+                                </div>
+                                <div>
+                                    <p class="text-[10px] text-[#a0a0a0]">平均油耗</p>
+                                    <p class="text-lg font-bold text-[#5c5c5c]">${stats.avgCon}</p>
+                                    <p class="text-[10px] text-[#a0a0a0]">L / 100km</p>
+                                </div>
+                            </div>
+                        `, "bg-[#fffefe]")}
+
+                        ${renderCard(`
+                            <div class="flex flex-col h-full justify-between">
+                                <div class="bg-[#e0f2f1] w-8 h-8 rounded-full flex items-center justify-center text-[#4db6ac] mb-2">
+                                    <span class="text-xs font-bold">$</span>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] text-[#a0a0a0]">每公里成本</p>
+                                    <p class="text-lg font-bold text-[#5c5c5c]">$${enrichedEntries[0]?.costPerKm || '-'}</p>
+                                    <p class="text-[10px] text-[#a0a0a0]">HKD / km</p>
+                                </div>
+                            </div>
+                        `, "bg-[#fffefe]")}
+                    </div>
+                </div>
+
+                <!-- 記錄列表 -->
+                <div>
+                    <h2 class="text-xs font-bold text-[#a0a0a0] tracking-widest mb-3 px-1">RECENT LOGS</h2>
+                    <div class="space-y-3">
+                        ${recentLogs}
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderForm = (isEditing) => {
+            const { date, totalCost, liters, odometer, notes } = state.formData;
+            const title = isEditing ? '✏️ 編輯記錄' : '⛽️ 新增入油';
+            const buttonText = isEditing ? '更新' : '儲存';
+            
+            const deleteButton = isEditing ? `
+                <button type="button" onclick="handleDeletePrompt('${state.editingId}')" class="text-red-400 text-sm bg-red-50 px-3 py-1 rounded-full flex items-center gap-1 hover:bg-red-100">
+                    ${Icon(Icons.Trash2, 14)} 刪除
+                </button>
+            ` : '';
+
+            return `
+                <div class="animate-modal bg-white rounded-[30px] p-6 shadow-xl border border-[#f0ebe0]">
+                    <h2 class="text-xl font-bold text-[#5c5c5c] mb-6 flex justify-between items-center">
+                        <span>${title}</span>
+                        ${deleteButton}
+                    </h2>
+                    <form onsubmit="handleSubmit(event)" class="space-y-4">
+                        <!-- 日期輸入框：py-2 最小高度，text-left 靠左對齊， font-bold 粗體 -->
+                        <div class="space-y-1">
+                            <label class="text-xs font-bold text-[#a0a0a0] ml-1">日期</label>
+                            <input required type="date" name="date" value="${date}" onchange="handleFormChange(event)"
+                                class="w-full bg-[#fcfaf5] py-2 px-3 rounded-2xl border border-[#f0ebe0] outline-none focus:border-[#6b705c] text-left font-bold text-[#5c5c5c]" />
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="space-y-1">
+                                <label class="text-xs font-bold text-[#a0a0a0] ml-1">金額 ($)</label>
+                                <input required type="number" step="0.01" name="totalCost" placeholder="0" value="${totalCost}" onchange="handleFormChange(event)"
+                                    class="w-full bg-[#fcfaf5] p-4 rounded-2xl border border-[#f0ebe0] outline-none focus:border-[#6b705c] font-bold text-xl text-[#5c5c5c]" />
+                            </div>
+                            <div class="space-y-1">
+                                <label class="text-xs font-bold text-[#a0a0a0] ml-1">油量 (L)</label>
+                                <input required type="number" step="0.01" name="liters" placeholder="0" value="${liters}" onchange="handleFormChange(event)"
+                                    class="w-full bg-[#fcfaf5] p-4 rounded-2xl border border-[#f0ebe0] outline-none focus:border-[#6b705c] font-bold text-xl text-[#5c5c5c]" />
+                            </div>
+                        </div>
+
+                        <div class="space-y-1">
+                            <label class="text-xs font-bold text-[#a0a0a0] ml-1">當前里數 (km)</label>
+                            <input required type="number" name="odometer" placeholder="例如: 15400" value="${odometer}" onchange="handleFormChange(event)"
+                                class="w-full bg-[#fcfaf5] p-4 rounded-2xl border border-[#f0ebe0] outline-none focus:border-[#6b705c] font-bold text-xl text-[#5c5c5c]" />
+                        </div>
+
+                        <div class="space-y-1">
+                            <label class="text-xs font-bold text-[#a0a0a0] ml-1">備註</label>
+                            <textarea name="notes" placeholder="寫點什麼..." onchange="handleFormChange(event)" rows="3"
+                                class="w-full bg-[#fcfaf5] p-4 rounded-2xl border border-[#f0ebe0] outline-none focus:border-[#6b705c] text-[#5c5c5c] resize-none">${notes}</textarea>
+                        </div>
+
+                        <button type="submit" class="w-full bg-[#5c5c5c] text-white font-bold p-4 rounded-2xl mt-4 flex justify-center items-center gap-2 hover:bg-[#4a4a4a] transition-all shadow-xl shadow-gray-200">
+                            ${Icon(Icons.Save, 18)} ${buttonText}
+                        </button>
+                    </form>
+                </div>
+            `;
+        };
+        
+        const renderYearModal = (monthlyBreakdown) => {
+            const listItems = monthlyBreakdown.map(month => `
+                <div onclick="handleSelectMonth('${month.key}')"
+                    class="bg-white p-4 rounded-2xl border border-[#f0ebe0] active:bg-[#fafafa] transition-colors cursor-pointer flex justify-between items-center group">
+                    <div>
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="font-bold text-[#5c5c5c] text-lg">${month.displayMonth}</span>
+                            <span class="text-xs text-[#a0a0a0]">${month.year}</span>
+                        </div>
+                        <div class="text-xs text-[#a0a0a0]">總行駛 ${month.totalDist} km</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="font-bold text-[#5c5c5c]">$${month.totalCost}</div>
+                        <div class="text-xs text-[#6b8c6b] font-bold mt-1 bg-[#e0e8d9] px-2 py-0.5 rounded-full inline-block">$${month.avgCostPerKm}/km</div>
+                    </div>
+                    ${Icon(Icons.ChevronRight, 16, "text-[#d0d0d0] group-hover:text-[#a0a0a0]")}
+                </div>
+            `).join('');
+
+            return renderModal(`📊 年度月份分析`, `handleShowYearBreakdown(false)`, listItems);
+        };
+
+        const renderMonthModal = (monthData) => {
+            const listItems = monthData.entries.map(entry => {
+                const dateObj = new Date(entry.date);
+                return `
+                    <div onclick="handleEdit('${entry.id}', true)" class="bg-white p-4 rounded-xl border border-[#f0ebe0] flex justify-between cursor-pointer active:scale-[0.98] transition-transform">
+                        <div>
+                            <div class="font-bold text-[#5c5c5c] flex items-center gap-2">
+                                <span>${dateObj.getDate()}日</span>
+                                <span class="bg-[#f0ebe0] text-[10px] px-1.5 rounded text-[#888]">${entry.performance}</span>
+                            </div>
+                            <div class="text-xs text-[#a0a0a0] mt-1">${entry.odometer.toLocaleString()} km (${entry.distance > 0 ? `+${entry.distance}` : '-'})</div>
+                        </div>
+                        <div class="text-right">
+                            <div class="font-bold text-[#5c5c5c]">$${entry.totalCost}</div>
+                            <div class="text-xs text-[#a0a0a0] mt-1">${entry.liters} L</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const headerContent = `
+                <div class="bg-[#6b705c] text-white p-4 rounded-xl mb-4 text-sm flex justify-between items-center">
+                    <div><div class="opacity-70 text-xs">本月油耗</div><div class="font-bold text-lg">${monthData.avgCon} L/100km</div></div>
+                    <div class="text-right"><div class="opacity-70 text-xs">每公里</div><div class="font-bold text-lg">$${monthData.avgCostPerKm}</div></div>
+                </div>
+                ${listItems}
+            `;
+
+            return renderModal(`📅 ${monthData.displayMonth} 明細`, `handleSelectMonth(null)`, headerContent);
+        };
+
+        const renderDeleteConfirmModal = (entryToDelete) => {
+            if (!entryToDelete) return '';
+            
+            return `
+                <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#4a4a4a]/50 backdrop-blur-sm animate-fade">
+                    <div class="bg-white rounded-[24px] p-6 w-full max-w-sm shadow-2xl animate-modal text-center">
+                        <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500">
+                            ${Icon(Icons.Trash2, 24)}
+                        </div>
+                        <h3 class="text-lg font-bold text-[#5c5c5c] mb-2">確認刪除?</h3>
+                        <p class="text-sm text-[#a0a0a0] mb-6">將刪除 ${new Date(entryToDelete.date).toLocaleDateString('zh-HK')} 嘅 $${entryToDelete.totalCost} 記錄。</p>
+                        <div class="flex gap-3">
+                            <button onclick="handleDeletePrompt(null)" class="flex-1 py-3 rounded-xl bg-[#f5f5f5] text-[#888] font-bold hover:bg-[#ebebeb] transition-colors">取消</button>
+                            <button onclick="handleDeleteConfirm()" class="flex-1 py-3 rounded-xl bg-red-500 text-white font-bold hover:bg-red-600 shadow-lg shadow-red-200 transition-colors">刪除</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderModal = (title, onCloseAction, content) => {
+            return `
+                <div class="fixed inset-0 bg-[#4a4a4a]/40 backdrop-blur-sm z-40 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade">
+                    <div class="bg-[#fcfaf5] w-full sm:max-w-md h-[90vh] sm:h-auto sm:max-h-[85vh] rounded-t-[30px] sm:rounded-[30px] flex flex-col shadow-2xl animate-modal overflow-hidden">
+                        <div class="p-5 bg-white border-b border-[#f0ebe0] flex justify-between items-center sticky top-0 z-10">
+                            <h3 class="font-bold text-[#5c5c5c]">${title}</h3>
+                            <button onclick="${onCloseAction}" class="p-2 bg-[#f5f5f5] rounded-full hover:bg-[#ebebeb] text-[#888]">
+                                ${Icon(Icons.X, 20)}
+                            </button>
+                        </div>
+                        <div class="p-5 overflow-y-auto flex-1 space-y-3">
+                            ${content}
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        // --- 事件處理函數 (供 HTML 調用) ---
+        window.handleViewToggle = () => {
+            if (state.view === 'dashboard') {
+                state.view = 'add';
+                state.editingId = null;
+                // 重置表單數據
+                state.formData = {
+                    date: new Date().toISOString().split('T')[0],
+                    totalCost: '',
+                    liters: '',
+                    odometer: '',
+                    notes: ''
+                };
+            } else {
+                state.view = 'dashboard';
+            }
+            render();
+        };
+
+        window.handleFormChange = (event) => {
+            state.formData[event.target.name] = event.target.value;
+        };
+
+        window.handleSubmit = (event) => {
+            event.preventDefault();
+            const data = state.formData;
+            
+            const newEntry = {
+                id: state.editingId || Date.now() + Math.random(),
+                date: data.date,
+                totalCost: Number(data.totalCost),
+                liters: Number(data.liters),
+                odometer: Number(data.odometer),
+                notes: data.notes || ''
+            };
+
+            if (state.editingId) {
+                state.entries = state.entries.map(ent => ent.id === state.editingId ? newEntry : ent);
+            } else {
+                state.entries = [newEntry, ...state.entries];
+            }
+            
+            state.view = 'dashboard';
+            state.editingId = null;
+            saveData();
+            render();
+        };
+
+        window.handleEdit = (id, fromModal = false) => {
+            const entry = state.entries.find(e => e.id == id);
+            if (!entry) return;
+            
+            state.formData = {
+                date: entry.date,
+                totalCost: entry.totalCost,
+                liters: entry.liters,
+                odometer: entry.odometer,
+                notes: entry.notes || ''
+            };
+            state.editingId = id;
+            state.view = 'add';
+            
+            // 如果是從月度明細點擊進入，關閉月度視窗
+            if (fromModal) {
+                 state.showYearBreakdown = false;
+                 state.selectedMonthData = null;
+            }
+
+            render();
+        };
+        
+        window.handleDeletePrompt = (id) => {
+            // id 可以是 null (取消), 或者是一個 entry ID (顯示確認)
+            state.deleteConfirmId = id;
+            render();
+        };
+        
+        window.handleDeleteConfirm = () => {
+            if (state.deleteConfirmId) {
+                state.entries = state.entries.filter(e => e.id != state.deleteConfirmId);
+                // 如果刪除的是正在編輯的項目
+                if (state.editingId == state.deleteConfirmId) {
+                    state.view = 'dashboard';
+                    state.editingId = null;
+                }
+                state.deleteConfirmId = null;
+                saveData();
+                render();
+            }
+        };
+
+        window.handleShowYearBreakdown = (show) => {
+            state.showYearBreakdown = show;
+            if (!show) {
+                state.selectedMonthData = null; // 關閉年度時同時關閉月份
+            }
+            render();
+        };
+
+        window.handleSelectMonth = (monthKey) => {
+            if (monthKey) {
+                const breakdown = getMonthlyBreakdown(getEnrichedEntries());
+                const monthData = breakdown.find(m => m.key === monthKey);
+                state.selectedMonthData = monthData;
+            } else {
+                state.selectedMonthData = null;
+            }
+            render();
+        };
+
+        // --- 主渲染函數 ---
+        window.render = () => {
+            const app = document.getElementById('app');
+            let content = '';
+            
+            const enrichedEntries = getEnrichedEntries();
+            const stats = getStats(enrichedEntries);
+
+            if (state.view === 'dashboard') {
+                content = renderDashboard(enrichedEntries, stats);
+            } else if (state.view === 'add') {
+                content = renderForm(!!state.editingId);
+            }
+
+            let modalContent = '';
+            if (state.showYearBreakdown) {
+                const monthlyBreakdown = getMonthlyBreakdown(enrichedEntries);
+                modalContent = renderYearModal(monthlyBreakdown);
+            }
+            if (state.selectedMonthData) {
+                modalContent = renderMonthModal(state.selectedMonthData);
+            }
+            
+            let deleteConfirmModal = '';
+            if (state.deleteConfirmId) {
+                const entryToDelete = state.entries.find(e => e.id == state.deleteConfirmId);
+                deleteConfirmModal = renderDeleteConfirmModal(entryToDelete);
+            }
+
+            app.innerHTML = `
+                ${renderHeader()}
+                <div class="p-5 space-y-6">
+                    ${content}
+                </div>
+                ${modalContent}
+                ${deleteConfirmModal}
+            `;
+        };
+        
+        // 頁面加載完成後啟動應用
+        window.onload = () => {
+            loadInitialData();
+            render();
+        };
+    </script>
+</body>
+</html>
+
+
